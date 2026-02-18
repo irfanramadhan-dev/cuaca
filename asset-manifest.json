@@ -1,15 +1,15 @@
 {
   "files": {
     "main.css": "/cuaca/static/css/main.25fd1edd.css",
-    "main.js": "/cuaca/static/js/main.06650c30.js",
+    "main.js": "/cuaca/static/js/main.c1c3796a.js",
     "static/js/453.41fd4f74.chunk.js": "/cuaca/static/js/453.41fd4f74.chunk.js",
     "index.html": "/cuaca/index.html",
     "main.25fd1edd.css.map": "/cuaca/static/css/main.25fd1edd.css.map",
-    "main.06650c30.js.map": "/cuaca/static/js/main.06650c30.js.map",
+    "main.c1c3796a.js.map": "/cuaca/static/js/main.c1c3796a.js.map",
     "453.41fd4f74.chunk.js.map": "/cuaca/static/js/453.41fd4f74.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.25fd1edd.css",
-    "static/js/main.06650c30.js"
+    "static/js/main.c1c3796a.js"
   ]
 }
