@@ -336,7 +336,7 @@ export default function WeatherMonitor() {
           <div style={{ flex:1,display:'flex',justifyContent:'center' }}>
             <div style={{ ...glass(),display:'flex',alignItems:'center',gap:10,padding:'7px 18px' }}>
               <div style={{ width:6,height:6,borderRadius:'50%',background:gpsStatus==='accurate'?'#22c55e':'#f59e0b',animation:'livepulse 2s ease-in-out infinite',flexShrink:0 }}/>
-              <span style={{ fontSize:'0.68rem',color:'#64748b',fontWeight:600 }}>{gpsStatus==='accurate'?'📍 GPS Aktif':'🌐 Lokasi IP'}</span>
+              <span style={{ fontSize:'0.68rem',color:'#64748b',fontWeight:600 }}>{gpsStatus==='accurate'?'GPS Aktif':'🌐 Lokasi IP'}</span>
               <span style={{ width:1,height:14,background:'rgba(0,0,0,0.08)',display:'block' }}/>
               <span style={{ fontSize:'0.68rem',color:'#94a3b8',...NUM }}>{location.coordinates&&`${location.coordinates.lat}°, ${location.coordinates.lon}°`}</span>
               <span style={{ width:1,height:14,background:'rgba(0,0,0,0.08)',display:'block' }}/>
