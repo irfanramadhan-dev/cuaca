@@ -30,6 +30,7 @@ export default function WeatherMonitor() {
   const [gpsStatus,      setGpsStatus]      = useState('detecting');
   const [weatherChanged, setWeatherChanged] = useState(false);
   const [loadingDots,    setLoadingDots]    = useState('');
+  const [isDesktop,      setIsDesktop]      = useState(false);
 
   const prevCode  = useRef(null);
   const coordsRef = useRef(null);
@@ -50,6 +51,15 @@ export default function WeatherMonitor() {
       document.removeEventListener('gesturestart', pg);
       document.removeEventListener('gesturechange',pg);
     };
+  }, []);
+
+  /* ── desktop breakpoint tracker ─────────── */
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    setIsDesktop(mq.matches);
+    const handler = e => setIsDesktop(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
   }, []);
 
   /* ── clock ───────────────────────────────── */
@@ -102,24 +112,32 @@ export default function WeatherMonitor() {
   , []);
 
   const getLocationName = useCallback(async (lat, lon) => {
+    const coords = { lat: lat.toFixed(4), lon: lon.toFixed(4) };
+
     try {
       const r = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=16&addressdetails=1`,
-        { headers:{ 'Accept-Language':'id', 'User-Agent':'CuacaLive/1.0' } }
+        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=id`
       );
-      const d = await r.json(); const a = d.address||{};
-      const city = a.quarter||a.neighbourhood||a.suburb||a.village||a.town||a.city_district||a.district||a.city||a.county||'Lokasi Anda';
-      const parent = a.city||a.town||a.county||a.state_district||a.state||'';
-      return { city, country: parent ? `${parent}, ${a.country||'Indonesia'}` : (a.country||'Indonesia'), coordinates:{ lat:lat.toFixed(4), lon:lon.toFixed(4) } };
-    } catch {
-      try {
-        const r2 = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=id`);
-        const d2 = await r2.json();
-        return { city:d2.locality||d2.city||'Lokasi Anda', country:`${d2.city?d2.city+', ':''}${d2.countryName||'Indonesia'}`, coordinates:{ lat:lat.toFixed(4), lon:lon.toFixed(4) } };
-      } catch {
-        return { city:'Lokasi Anda', country:'Indonesia', coordinates:{ lat:lat.toFixed(4), lon:lon.toFixed(4) } };
+      const d = await r.json();
+      if (d && (d.locality || d.city)) {
+        const city    = d.locality || d.city || 'Lokasi Anda';
+        const parent  = (d.city && d.city !== city) ? d.city : (d.principalSubdivision || '');
+        const country = d.countryName || 'Indonesia';
+        return { city, country: parent ? `${parent}, ${country}` : country, coordinates: coords };
       }
-    }
+    } catch {}
+
+    try {
+      const r = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=16&addressdetails=1&accept-language=id`
+      );
+      const d = await r.json(); const a = d.address || {};
+      const city   = a.quarter||a.neighbourhood||a.suburb||a.village||a.town||a.city_district||a.district||a.city||a.county||'Lokasi Anda';
+      const parent = a.city||a.town||a.county||a.state_district||a.state||'';
+      return { city, country: parent ? `${parent}, ${a.country||'Indonesia'}` : (a.country||'Indonesia'), coordinates: coords };
+    } catch {}
+
+    return { city: 'Lokasi Anda', country: 'Indonesia', coordinates: coords };
   }, []);
 
   /* ── silent refresh (auto-update) ─────────── */
@@ -129,7 +147,6 @@ export default function WeatherMonitor() {
       if (!res.ok) return;
       const data = await res.json();
       const code = data.current.weather_code;
-      // Deteksi perubahan cuaca → tampilkan toast
       if (prevCode.current !== null && prevCode.current !== code) {
         setWeatherChanged(true);
         setTimeout(() => setWeatherChanged(false), 4000);
@@ -138,7 +155,7 @@ export default function WeatherMonitor() {
       setWeatherData(buildState(data, code));
       setHistoricalData(buildChart(data));
       setLastUpdate(new Date());
-    } catch(e) { console.error('silent refresh error:', e); }
+    } catch {}
   }, [API, buildState, buildChart]);
 
   /* ── first load ──────────────────────────── */
@@ -154,7 +171,7 @@ export default function WeatherMonitor() {
       setHistoricalData(buildChart(data));
       setLastUpdate(new Date());
       setLoading(false);
-    } catch(e) { console.error(e); setLoading(false); }
+    } catch { setLoading(false); }
   }, [API, buildState, buildChart, getLocationName]);
 
   const go = useCallback((lat, lon) => {
@@ -166,31 +183,45 @@ export default function WeatherMonitor() {
     if (!navigator.geolocation) { setGpsStatus('unavailable'); go(-7.7956, 110.3695); return; }
     setGpsStatus('detecting');
     navigator.geolocation.getCurrentPosition(
-      ({ coords:{ latitude:la, longitude:lo } }) => { setGpsStatus('accurate'); coordsRef.current={ lat:la, lon:lo }; fetchWeather(la, lo); },
-      () => {
-        setGpsStatus('ip');
-        fetch('https://ipapi.co/json/').then(r=>r.json())
-          .then(d => { const la=d.latitude??-7.7956, lo=d.longitude??110.3695; coordsRef.current={lat:la,lon:lo}; fetchWeather(la,lo); })
-          .catch(() => go(-7.7956, 110.3695));
+      ({ coords:{ latitude:la, longitude:lo, accuracy } }) => {
+        setGpsStatus(accuracy <= 100 ? 'accurate' : 'accurate');
+        coordsRef.current={ lat:la, lon:lo };
+        fetchWeather(la, lo);
       },
-      { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
+      (err) => {
+        setGpsStatus('ip');
+        const tryIP = async () => {
+          const apis = [
+            () => fetch('https://ipapi.co/json/').then(r=>r.json()).then(d=>({ lat:d.latitude, lon:d.longitude, ok:!!(d.latitude&&d.longitude) })),
+            () => fetch('https://ip-api.com/json/?fields=lat,lon,status').then(r=>r.json()).then(d=>({ lat:d.lat, lon:d.lon, ok:d.status==='success' })),
+            () => fetch('https://ipwho.is/').then(r=>r.json()).then(d=>({ lat:d.latitude, lon:d.longitude, ok:d.success })),
+          ];
+          for (const api of apis) {
+            try {
+              const { lat, lon, ok } = await api();
+              if (ok && lat && lon) { coordsRef.current={lat,lon}; fetchWeather(lat, lon); return; }
+            } catch {}
+          }
+          go(-7.7956, 110.3695);
+        };
+        tryIP();
+      },
+      { enableHighAccuracy:true, timeout:15000, maximumAge:0 }
     );
   }, [fetchWeather, go]);
 
   /* ── init ────────────────────────────────── */
   useEffect(() => { detectLocation(); }, [detectLocation]);
 
-  /* ── AUTO-REFRESH: interval di-setup setelah loading selesai
-        Pakai ref agar tidak re-create saat state berubah ───── */
+  /* ── AUTO-REFRESH ────────────────────────── */
   useEffect(() => {
-    if (loading) return; // tunggu sampai data pertama ada
-    // Bersihkan interval lama kalau ada
+    if (loading) return;
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       if (coordsRef.current) {
         silentRefresh(coordsRef.current.lat, coordsRef.current.lon);
       }
-    }, 5 * 60 * 1000); // 5 menit
+    }, 5 * 60 * 1000);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -203,15 +234,22 @@ export default function WeatherMonitor() {
   };
 
   const Ring = ({ value, max, color, label, unit, size=80 }) => {
-    const r=size*0.42, C=2*Math.PI*r, off=C-Math.min(value/max,1)*C, vb=size*2;
+    const vb   = size * 2;                        // viewBox: e.g. 160 x 160
+    const cx   = vb / 2;                          // center
+    const R    = cx * 0.82;                       // actual SVG circle radius (matches r*1.9 ≈ 0.82*vb/2)
+    const C    = 2 * Math.PI * R;                 // true circumference
+    const pct  = Math.min(Math.max(value / max, 0), 1);
+    const fill = pct * C;                         // arc length to fill
+    const gap  = C - fill;                        // remaining empty arc
     return (
       <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
         <div style={{ position:'relative', width:size, height:size }}>
           <svg style={{ transform:'rotate(-90deg)', width:'100%', height:'100%' }} viewBox={`0 0 ${vb} ${vb}`}>
-            <circle cx={vb/2} cy={vb/2} r={r*1.9} fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth={vb*0.045}/>
-            <circle cx={vb/2} cy={vb/2} r={r*1.9} fill="none" stroke={color} strokeWidth={vb*0.045} strokeLinecap="round"
-              strokeDasharray={C*4.52} strokeDashoffset={off*4.52}
-              style={{ transition:'stroke-dashoffset 1.8s cubic-bezier(.4,0,.2,1)' }}/>
+            <circle cx={cx} cy={cx} r={R} fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth={vb*0.045}/>
+            <circle cx={cx} cy={cx} r={R} fill="none" stroke={color} strokeWidth={vb*0.045} strokeLinecap="round"
+              strokeDasharray={`${fill} ${gap}`}
+              strokeDashoffset={0}
+              style={{ transition:'stroke-dasharray 1.8s cubic-bezier(.4,0,.2,1)' }}/>
           </svg>
           <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center' }}>
             <span style={{ fontFamily:F,fontWeight:800,fontSize:size*0.24,color:'#1e293b',lineHeight:1,...NUM }}>{Math.round(value)}</span>
@@ -223,12 +261,12 @@ export default function WeatherMonitor() {
     );
   };
 
-  // Desktop chart — flex grows to fill space
+  // Desktop chart — hanya di-render saat isDesktop true (container punya dimensi nyata)
   const DeskChart = ({ data, color, dataKey, label }) => (
     <div style={{ flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
       <span style={{ fontFamily:F, fontSize:'0.6rem', fontWeight:700, color, marginBottom:2 }}>{label}</span>
-      <div style={{ flex:1, minHeight:36 }}>
-        <ResponsiveContainer width="100%" height="100%">
+      <div style={{ flex:1, minHeight:40 }}>
+        <ResponsiveContainer width="100%" height="100%" debounce={50}>
           <LineChart data={data} margin={{ top:2,right:2,left:2,bottom:2 }}>
             <YAxis hide domain={['dataMin-1','dataMax+1']}/>
             <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} isAnimationActive={false}/>
@@ -238,12 +276,12 @@ export default function WeatherMonitor() {
     </div>
   );
 
-  // Mobile chart — fixed height
+  // Mobile chart — hanya di-render saat !isDesktop (container punya dimensi nyata)
   const MobChart = ({ data, color, dataKey, label }) => (
     <div>
       <p style={{ fontFamily:F, fontSize:'0.65rem', fontWeight:700, color, margin:'0 0 4px' }}>{label}</p>
-      <div style={{ height:50 }}>
-        <ResponsiveContainer width="100%" height={50}>
+      <div style={{ height:50, width:'100%' }}>
+        <ResponsiveContainer width="100%" height={50} debounce={50}>
           <LineChart data={data} margin={{ top:3,right:4,left:4,bottom:3 }}>
             <YAxis hide domain={['dataMin-1','dataMax+1']}/>
             <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2.5} dot={false} isAnimationActive={false}/>
@@ -319,7 +357,6 @@ export default function WeatherMonitor() {
 
       {/* ══════════════════════════════════════
           DESKTOP  ≥ 1024px
-          3-col, height:100dvh, overflow:hidden
           ══════════════════════════════════════ */}
       <div className="desk" style={{ position:'relative',zIndex:1,height:'100dvh',overflow:'hidden',display:'none',flexDirection:'column',padding:'16px 20px',gap:12 }}>
 
@@ -371,7 +408,7 @@ export default function WeatherMonitor() {
                 { label:'Tekanan', value:`${Math.round(weatherData.main.pressure)}`, unit:'hPa', icon:'🌡', color:'#f97316' },
                 { label:'Angin',   value:`${weatherData.wind.speed.toFixed(1)}`,      unit:'m/s', icon:'💨', color:'#0ea5e9' },
                 { label:'Hujan',   value:`${weatherData.precipitation.daily_sum.toFixed(1)}`, unit:'mm', icon:'🌧', color:'#6366f1' },
-                { label:'Peluang',   value:`${weatherData.precipitation.probability}`,  unit:'%',  icon:'☔', color:'#8b5cf6' },
+                { label:'Peluang', value:`${weatherData.precipitation.probability}`,  unit:'%',  icon:'☔', color:'#8b5cf6' },
               ].map(({ label,value,unit,icon,color }) => (
                 <div key={label} style={{ background:'rgba(0,0,0,0.025)',borderRadius:12,padding:'8px 10px',border:'1px solid rgba(0,0,0,0.04)' }}>
                   <div style={{ fontSize:'0.68rem' }}>{icon} <span style={{ fontSize:'0.56rem',color:'#94a3b8',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em' }}>{label}</span></div>
@@ -403,25 +440,27 @@ export default function WeatherMonitor() {
               </div>
               <div style={{ height:1,background:'rgba(0,0,0,0.05)',margin:'8px 0' }}/>
               <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:8 }}>
-                <StatPill label="Tekanan Udara" value={Math.round(weatherData.main.pressure)} unit="hPa" color="#f97316" icon="🌡"/>
-                <StatPill label="Kecepatan Angin"    value={weatherData.wind.speed.toFixed(1)}     unit="m/s" color="#0ea5e9" icon="💨"/>
-                <StatPill label="Curah Hujan"   value={weatherData.precipitation.daily_sum.toFixed(1)} unit="mm" color="#6366f1" icon="🌧"/>
-                <StatPill label="Peluang Hujan"   value={weatherData.precipitation.probability} unit="%"  color="#8b5cf6" icon="☔"/>
+                <StatPill label="Tekanan Udara"  value={Math.round(weatherData.main.pressure)}              unit="hPa" color="#f97316" icon="🌡"/>
+                <StatPill label="Kecepatan Angin" value={weatherData.wind.speed.toFixed(1)}                 unit="m/s" color="#0ea5e9" icon="💨"/>
+                <StatPill label="Curah Hujan"    value={weatherData.precipitation.daily_sum.toFixed(1)}     unit="mm"  color="#6366f1" icon="🌧"/>
+                <StatPill label="Peluang Hujan"  value={weatherData.precipitation.probability}              unit="%"   color="#8b5cf6" icon="☔"/>
               </div>
             </div>
           </div>
 
-          {/* col 3: charts */}
+          {/* col 3: charts — hanya render saat isDesktop */}
           <div style={{ ...glass({padding:'20px',display:'flex',flexDirection:'column'}) }}>
-            <div style={{ fontWeight:800,fontSize:'1.05rem',color:'#1e293b',letterSpacing:'-0.02em',marginBottom:10 }}>24 Jam</div>
+            <div style={{ fontWeight:800,fontSize:'1.05rem',color:'#1e293b',letterSpacing:'-0.02em',marginBottom:10 }}>Perubahan 24 Jam</div>
             <div style={{ flex:1,minHeight:0,display:'flex',flexDirection:'column',gap:8 }}>
-              <DeskChart data={historicalData} color="#f97316" dataKey="temp"     label="↗ Suhu (°C)"/>
-              <div style={{ height:1,background:'rgba(0,0,0,0.04)',flexShrink:0 }}/>
-              <DeskChart data={historicalData} color="#f59e0b" dataKey="humidity" label="💧 Kelembaban (%)"/>
-              <div style={{ height:1,background:'rgba(0,0,0,0.04)',flexShrink:0 }}/>
-              <DeskChart data={historicalData} color="#6366f1" dataKey="rain"     label="🌧 Curah Hujan (mm)"/>
-              <div style={{ height:1,background:'rgba(0,0,0,0.04)',flexShrink:0 }}/>
-              <DeskChart data={historicalData} color="#ec4899" dataKey="rainProb" label="☔ Peluang Hujan (%)"/>
+              {isDesktop && <>
+                <DeskChart data={historicalData} color="#f97316" dataKey="temp"     label="↗ Suhu (°C)"/>
+                <div style={{ height:1,background:'rgba(0,0,0,0.04)',flexShrink:0 }}/>
+                <DeskChart data={historicalData} color="#f59e0b" dataKey="humidity" label="💧 Kelembaban (%)"/>
+                <div style={{ height:1,background:'rgba(0,0,0,0.04)',flexShrink:0 }}/>
+                <DeskChart data={historicalData} color="#6366f1" dataKey="rain"     label="🌧 Curah Hujan (mm)"/>
+                <div style={{ height:1,background:'rgba(0,0,0,0.04)',flexShrink:0 }}/>
+                <DeskChart data={historicalData} color="#ec4899" dataKey="rainProb" label="☔ Peluang Hujan (%)"/>
+              </>}
             </div>
           </div>
         </div>
@@ -429,7 +468,6 @@ export default function WeatherMonitor() {
 
       {/* ══════════════════════════════════════
           MOBILE  < 1024px
-          Gaya lama: 2 card besar, bisa scroll
           ══════════════════════════════════════ */}
       <div className="mob" style={{ position:'relative',zIndex:1,
         padding:'clamp(8px,3vw,20px)',
@@ -481,10 +519,10 @@ export default function WeatherMonitor() {
           </div>
           <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,paddingTop:14,borderTop:'1px solid rgba(0,0,0,0.05)' }}>
             {[
-              { label:'Tekanan Udara', value:`${Math.round(weatherData.main.pressure)} hPa` },
-              { label:'Kecepatan Angin',    value:`${weatherData.wind.speed.toFixed(1)} m/s` },
-              { label:'Curah Hujan',   value:`${weatherData.precipitation.daily_sum.toFixed(1)} mm` },
-              { label:'Peluang Hujan',   value:`${weatherData.precipitation.probability}%` },
+              { label:'Tekanan Udara',  value:`${Math.round(weatherData.main.pressure)} hPa` },
+              { label:'Kecepatan Angin', value:`${weatherData.wind.speed.toFixed(1)} m/s` },
+              { label:'Curah Hujan',    value:`${weatherData.precipitation.daily_sum.toFixed(1)} mm` },
+              { label:'Peluang Hujan',  value:`${weatherData.precipitation.probability}%` },
             ].map(({ label,value }) => (
               <div key={label} style={{ background:'rgba(0,0,0,0.025)',borderRadius:14,padding:'10px 12px',border:'1px solid rgba(0,0,0,0.04)' }}>
                 <p style={{ fontSize:'0.62rem',color:'#94a3b8',margin:'0 0 2px' }}>{label}</p>
@@ -504,11 +542,14 @@ export default function WeatherMonitor() {
             <Ring value={weatherData.precipitation.probability} max={100} color="#6366f1" label="Hujan" unit="%" size={80}/>
           </div>
 
+          {/* Charts — hanya render saat !isDesktop */}
           <div style={{ display:'flex',flexDirection:'column',gap:4 }}>
-            <MobChart data={historicalData} color="#f97316" dataKey="temp"     label="Suhu (24 Jam)"/>
-            <MobChart data={historicalData} color="#f59e0b" dataKey="humidity" label="Kelembaban (24 Jam)"/>
-            <MobChart data={historicalData} color="#6366f1" dataKey="rain"     label="Curah Hujan per Jam (mm)"/>
-            <MobChart data={historicalData} color="#ec4899" dataKey="rainProb" label="Peluang Hujan (%)"/>
+            {!isDesktop && <>
+              <MobChart data={historicalData} color="#f97316" dataKey="temp"     label="Suhu (24 Jam)"/>
+              <MobChart data={historicalData} color="#f59e0b" dataKey="humidity" label="Kelembaban (24 Jam)"/>
+              <MobChart data={historicalData} color="#6366f1" dataKey="rain"     label="Curah Hujan per Jam (mm)"/>
+              <MobChart data={historicalData} color="#ec4899" dataKey="rainProb" label="Peluang Hujan (%)"/>
+            </>}
           </div>
         </div>
 
